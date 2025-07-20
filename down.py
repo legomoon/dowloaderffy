@@ -2,6 +2,7 @@ from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 import subprocess
 import os
+import asyncio
 
 BOT_TOKEN = '7568707247:AAG6B0KHQ023bziF76ivCKVWLf6lHRyLL8c'
 
@@ -18,26 +19,36 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("در حال دانلود موزیک... ⏳")
 
     try:
-        # استفاده از SpotDL برای گرفتن موزیک از اسپاتیفای (درواقع یوتیوب)
-        subprocess.run(["spotdl", url], check=True)
+        # spotdl رو به صورت async اجرا میکنیم با asyncio.create_subprocess_exec
+        process = await asyncio.create_subprocess_exec(
+            "spotdl", url,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        stdout, stderr = await process.communicate()
 
-        # پیدا کردن فایل MP3 دانلود شده
-        for file in os.listdir():
-            if file.endswith(".mp3"):
-                with open(file, 'rb') as f:
-                    await update.message.reply_audio(audio=f)
-                os.remove(file)  # حذف فایل بعد از ارسال
-                break
-        else:
+        if process.returncode != 0:
+            await update.message.reply_text(f"خطا در دانلود موزیک 🚫\n{stderr.decode()}")
+            return
+
+        # پیدا کردن آخرین فایل mp3 ساخته شده در دایرکتوری فعلی
+        mp3_files = [f for f in os.listdir() if f.endswith(".mp3")]
+        if not mp3_files:
             await update.message.reply_text("نتونستم فایل موزیک رو پیدا کنم 😞")
+            return
 
-    except subprocess.CalledProcessError as e:
-        await update.message.reply_text(f"خطا در دانلود موزیک 🚫\n{e}")
+        latest_file = max(mp3_files, key=os.path.getctime)
+
+        with open(latest_file, 'rb') as f:
+            await update.message.reply_audio(audio=f)
+
+        os.remove(latest_file)  # حذف فایل بعد از ارسال
+
     except Exception as e:
         await update.message.reply_text(f"مشکلی پیش اومده 😵\n{e}")
 
-app = ApplicationBuilder().token(BOT_TOKEN).build()
-app.add_handler(CommandHandler("start", start))
-app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_link))
-
-app.run_polling()
+if __name__ == '__main__':
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_link))
+    app.run_polling()
